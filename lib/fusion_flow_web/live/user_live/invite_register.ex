@@ -1,26 +1,36 @@
-defmodule FusionFlowWeb.UserLive.Setup do
+defmodule FusionFlowWeb.UserLive.InviteRegister do
   use FusionFlowWeb, :live_view
 
   alias FusionFlow.Accounts
 
   @impl true
-  def mount(_params, _session, socket) do
-    if Accounts.has_system_admin?() do
+  def mount(%{"token" => token}, _session, socket) do
+    if socket.assigns[:current_scope] && socket.assigns.current_scope.user do
       {:ok,
        socket
-       |> put_flash(:info, gettext("Setup already completed. Please log in."))
-       |> redirect(to: ~p"/users/log-in")}
+       |> put_flash(:info, gettext("You are already logged in."))
+       |> redirect(to: ~p"/")}
     else
-      form =
-        %FusionFlow.Accounts.User{}
-        |> FusionFlow.Accounts.User.registration_changeset(%{})
-        |> FusionFlow.Accounts.User.password_changeset(%{})
-        |> to_form(as: "user")
+      case Accounts.get_invite_by_token(token) do
+        :error ->
+          {:ok,
+           socket
+           |> put_flash(:error, gettext("This invite link is invalid or has expired."))
+           |> redirect(to: ~p"/users/log-in")}
 
-      {:ok,
-       socket
-       |> assign(:page_title, gettext("Setup"))
-       |> assign(:form, form)}
+        {:ok, _inviter, _token_struct} ->
+          form =
+            %FusionFlow.Accounts.User{}
+            |> FusionFlow.Accounts.User.registration_changeset(%{})
+            |> FusionFlow.Accounts.User.password_changeset(%{})
+            |> to_form(as: "user")
+
+          {:ok,
+           socket
+           |> assign(:page_title, gettext("Create your account"))
+           |> assign(:token, token)
+           |> assign(:form, form)}
+      end
     end
   end
 
@@ -31,17 +41,17 @@ defmodule FusionFlowWeb.UserLive.Setup do
       <div class="w-full max-w-md bg-white dark:bg-slate-800 p-8 rounded-3xl shadow-2xl border border-gray-100 dark:border-slate-700/50">
         <div class="text-center mb-8">
           <h1 class="text-3xl font-extrabold text-gray-900 dark:text-white tracking-tight">
-            {gettext("Setup FusionFlow")}
+            {gettext("Create your account")}
           </h1>
 
           <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            {gettext("Create the first administrator account to get started.")}
+            {gettext("You were invited to join FusionFlow. Fill in your details below.")}
           </p>
         </div>
 
         <.form
           for={@form}
-          id="setup_form"
+          id="invite-register-form"
           phx-submit="save"
           class="space-y-5"
         >
@@ -84,6 +94,12 @@ defmodule FusionFlowWeb.UserLive.Setup do
             </.button>
           </div>
         </.form>
+
+        <p class="mt-6 text-center text-sm text-gray-500 dark:text-gray-400">
+          <.link href={~p"/users/log-in"} class="text-primary hover:underline">
+            {gettext("Already have an account? Log in")}
+          </.link>
+        </p>
       </div>
     </div>
     """
@@ -91,7 +107,9 @@ defmodule FusionFlowWeb.UserLive.Setup do
 
   @impl true
   def handle_event("save", %{"user" => user_params}, socket) do
-    case Accounts.register_system_admin(user_params) do
+    token = socket.assigns.token
+
+    case Accounts.register_user_from_invite(user_params, token) do
       {:ok, _user} ->
         {:noreply,
          socket
@@ -99,7 +117,7 @@ defmodule FusionFlowWeb.UserLive.Setup do
          |> redirect(to: ~p"/users/log-in")}
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        # Rebuild from params so all fields persist when showing validation errors
+        # Rebuild changeset from params so all fields (including password) persist when showing errors
         form_changeset =
           %FusionFlow.Accounts.User{}
           |> FusionFlow.Accounts.User.registration_changeset(user_params)
